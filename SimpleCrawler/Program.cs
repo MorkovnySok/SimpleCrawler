@@ -99,6 +99,7 @@ public class DocumentationCrawler
                         if (
                             absoluteUrl.StartsWith(_baseUri.AbsoluteUri)
                             && !_visitedUrls.Contains(absoluteUrl)
+                            && !absoluteUrl.Contains('#')
                         )
                         {
                             await CrawlPageAsync(absoluteUrl);
