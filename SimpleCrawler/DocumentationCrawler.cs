@@ -12,16 +12,16 @@ public class DocumentationCrawler
     private readonly Uri _baseUri;
 
     private readonly HashSet<string> _visitedUrls = [];
-    private readonly List<DocumentPage> _documents = [];
+    private readonly List<ParseResult> _documents = [];
     private readonly string _xpath;
     private readonly string _authToken;
-    private readonly string _outputDirectory;
+    private readonly string? _outputDirectory;
 
     public DocumentationCrawler(
         string baseUrl,
         string xpath,
         string authToken,
-        string outputDirectory
+        string? outputDirectory
     )
     {
         _httpClient = new HttpClient(
@@ -39,13 +39,21 @@ public class DocumentationCrawler
         _authToken = authToken;
         _outputDirectory = outputDirectory;
 
-        Directory.CreateDirectory(_outputDirectory);
+        if (_outputDirectory != null && !Directory.Exists(_outputDirectory))
+        {
+            Directory.CreateDirectory(_outputDirectory);
+        }
     }
 
-    public async Task CrawlAsync()
+    public async Task<List<ParseResult>> CrawlAsync()
     {
         await CrawlPageAsync(_baseUri.AbsoluteUri);
-        await SaveResultsAsync();
+        if (_outputDirectory != null)
+        {
+            await SaveResultsAsync();
+        }
+
+        return _documents;
     }
 
     private async Task CrawlPageAsync(string url)
@@ -78,14 +86,7 @@ public class DocumentationCrawler
             var titleNode = doc.DocumentNode.SelectSingleNode("//title");
             var title = titleNode?.InnerText.Trim() ?? url;
 
-            _documents.Add(
-                new DocumentPage
-                {
-                    Url = url,
-                    Title = title,
-                    Content = contentNode.InnerText.Trim(),
-                }
-            );
+            _documents.Add(new ParseResult { Url = url, Content = contentNode.InnerText.Trim() });
 
             var links = contentNode.SelectNodes("//a[@href]");
             if (links != null)
@@ -93,21 +94,22 @@ public class DocumentationCrawler
                 foreach (var link in links)
                 {
                     var href = link.GetAttributeValue("href", "");
-                    if (!string.IsNullOrEmpty(href))
+                    if (string.IsNullOrEmpty(href))
                     {
-                        var absoluteUrl = new Uri(_baseUri, href).AbsoluteUri;
-                        if (
-                            absoluteUrl.StartsWith(_baseUri.AbsoluteUri)
-                            && !_visitedUrls.Contains(absoluteUrl)
-                            && !absoluteUrl.Contains('#')
-                        )
-                        {
-                            await CrawlPageAsync(absoluteUrl);
-                        }
+                        continue;
+                    }
+
+                    var absoluteUrl = new Uri(_baseUri, href).AbsoluteUri;
+                    if (
+                        absoluteUrl.StartsWith(_baseUri.AbsoluteUri)
+                        && !_visitedUrls.Contains(absoluteUrl)
+                        && !absoluteUrl.Contains('#')
+                    )
+                    {
+                        await CrawlPageAsync(absoluteUrl);
                     }
                 }
             }
-
         }
         catch (Exception ex)
         {
@@ -125,14 +127,13 @@ public class DocumentationCrawler
         request.Headers.Add("Accept-Encoding", "gzip, deflate, br");
         request.Headers.Add("Connection", "keep-alive");
 
-        var token = _authToken;
-        SetAuthorizationHeader(request, token);
+        SetAuthorizationHeader(request, _authToken);
         return request;
     }
 
     private void SetAuthorizationHeader(HttpRequestMessage request, string token)
     {
-        if (token.Contains(":"))
+        if (token.Contains(':'))
         {
             token = token.Replace("Basic ", string.Empty);
             var data = token.Split(":");
@@ -157,54 +158,5 @@ public class DocumentationCrawler
         var outputPath = Path.Combine(_outputDirectory, "crawler_results.json");
         await File.WriteAllTextAsync(outputPath, json);
         Console.WriteLine($"Results saved to {outputPath}");
-    }
-}
-
-public static class Extensions
-{
-    public static async Task<string> ToRawString(this HttpRequestMessage request)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine($"{request.Method} {request.RequestUri} HTTP/{request.Version}");
-        foreach (var header in request.Headers)
-        {
-            sb.AppendLine($"{header.Key}: {string.Join(", ", header.Value)}");
-        }
-        if (request.Content != null)
-        {
-            sb.AppendLine();
-            sb.AppendLine(await request.Content.ReadAsStringAsync());
-        }
-        return sb.ToString();
-    }
-}
-
-public class DocumentPage
-{
-    public required string Url { get; set; }
-    public required string Title { get; set; }
-    public required string Content { get; set; }
-}
-
-class Program
-{
-    public static async Task Main(string[] args)
-    {
-        if (args.Length != 3)
-        {
-            Console.WriteLine(
-                "Usage: SimpleCrawler.exe <url to crawl> <xpath to get content> <Authorization token>"
-            );
-            return;
-        }
-
-        var crawler = new DocumentationCrawler(
-            baseUrl: args[0],
-            xpath: args[1],
-            authToken: args[2],
-            outputDirectory: "CrawledData"
-        );
-
-        await crawler.CrawlAsync();
     }
 }
